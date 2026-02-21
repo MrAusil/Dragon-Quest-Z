@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="description" content="Dragon Quest Z - A Dragon Ball Z inspired browser platformer. Fight Raditz, Nappa, Vegeta, Frieza and Cell! Built by Arpit.">
+  <meta name="theme-color" content="#000000">
+  <title>Dragon Quest Z — The Saiyan Saga</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="manifest" href="manifest.json">
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+
+  <!-- ROTATE PROMPT (portrait mode on mobile) -->
+  <div id="rotatePrompt">
+    <div class="ri">📱</div>
+    <p>ROTATE YOUR DEVICE<br>TO LANDSCAPE</p>
+  </div>
+
+  <!-- HUD -->
+  <div id="hud">
+    <div class="panel">
+      <div class="pname" id="hudPlayerName">☯ GOKU</div>
+      <div class="lbl">HP</div><div class="bar"><div class="fill" id="fHP" style="width:100%"></div></div>
+      <div class="lbl">KI</div><div class="bar"><div class="fill" id="fKI" style="width:100%"></div></div>
+    </div>
+    <div class="panel" id="scorePnl">
+      <div class="lbl" id="lvlTag">LEVEL 1</div>
+      <div id="scoreNum">000000</div>
+      <div id="comboTag"></div>
+    </div>
+  </div>
+  <div id="bossPnl">
+    <div class="lbl" id="bossLbl">RADITZ</div>
+    <div class="bar" style="height:13px"><div class="fill" id="fBoss" style="width:100%"></div></div>
+  </div>
+
+  <!-- TITLE / MAIN MENU -->
+  <div class="screen" id="sTitle">
+    <div id="titleLogo">
+      <div class="tl1">DRAGON QUEST Z</div>
+      <div class="tl2">— THE SAIYAN SAGA —</div>
+    </div>
+    <div class="menuBtns">
+      <button class="mBtn primary" id="bStart"><span class="mi">▶</span>START GAME</button>
+      <button class="mBtn" id="bCont" style="display:none"><span class="mi">↩</span>CONTINUE</button>
+      <button class="mBtn" id="bSkills"><span class="mi">🌟</span>SKILLS</button>
+      <button class="mBtn" id="bSettings"><span class="mi">⚙</span>SETTINGS</button>
+      <button class="mBtn" id="bCredits"><span class="mi">★</span>CREDITS</button>
+    </div>
+    <div id="titleHs"></div>
+    <div class="hint2">ARROWS/WASD = Move &nbsp;|&nbsp; SPACE/W = Jump &nbsp;|&nbsp; I = Air Slam<br>J = Melee Combo &nbsp;|&nbsp; K = Ki Blast &nbsp;|&nbsp; Hold L = Kamehameha &nbsp;|&nbsp; T = Super Saiyan<br>P = Pause &nbsp;|&nbsp; Mobile: on-screen controls</div>
+  </div>
+
+  <!-- PAUSE -->
+  <div class="screen off" id="sPause">
+    <h1 style="font-size:clamp(26px,5vw,44px)">PAUSED</h1>
+    <button class="btn" id="bResume">RESUME</button>
+    <button class="btn" id="bPauseSkills">SKILLS</button>
+    <button class="btn sec" id="bQuit">QUIT TO MENU</button>
+  </div>
+
+  <!-- GAME OVER -->
+  <div class="screen off" id="sOver">
+    <h1 style="color:#ff1133;text-shadow:0 0 18px #ff0000">DEFEATED</h1>
+    <h2>YOUR POWER LEVEL WAS NOT ENOUGH</h2>
+    <div id="overScore" style="color:#ffe234;font-size:19px;margin-bottom:18px"></div>
+    <button class="btn" id="bRetry">TRY AGAIN</button>
+    <button class="btn sec" id="bOverMenu">MAIN MENU</button>
+  </div>
+
+  <!-- LEGACY VICTORY (fallback) -->
+  <div class="screen off" id="sVictory">
+    <h1 style="color:#ffe234">VICTORY!</h1>
+    <h2 id="vicMsg">EARTH IS SAVED!</h2>
+    <div id="vicScore" style="color:#ffe234;font-size:19px;margin-bottom:18px"></div>
+    <button class="btn" id="bNext">NEXT LEVEL</button>
+    <button class="btn sec" id="bVicMenu">MAIN MENU</button>
+  </div>
+
+  <!-- SETTINGS -->
+  <div class="screen off" id="sSettings">
+    <h1 style="font-size:clamp(20px,4vw,38px)">SETTINGS</h1>
+    <div class="settRow">
+      <span class="settLabel">🎵 MUSIC</span>
+      <input type="range" id="slMusic" min="0" max="100" value="40">
+    </div>
+    <div class="settRow">
+      <span class="settLabel">💥 SFX</span>
+      <input type="range" id="slSFX" min="0" max="100" value="70">
+    </div>
+    <div class="settDivider"></div>
+    <div class="settRow">
+      <span class="settLabel">🔇 MUTE ALL</span>
+      <button class="btn sec" id="bToggleMute" style="padding:7px 20px;font-size:11px">OFF</button>
+    </div>
+    <div class="settDivider"></div>
+    <div class="settRow" style="justify-content:center">
+      <button class="btn sec" id="bResetProgress" style="font-size:10px;padding:8px 18px;color:#ff4444;border:1px solid #ff444455">RESET PROGRESS</button>
+    </div>
+    <button class="btn" id="bSettingsBack" style="margin-top:14px">BACK</button>
+  </div>
+
+  <!-- CREDITS -->
+  <div class="screen off" id="sCredits">
+    <div class="credBig">DRAGON QUEST Z</div>
+    <div class="credLine" style="margin-top:4px">THE SAIYAN SAGA</div>
+    <div class="settDivider" style="margin:18px 0; max-width:280px"></div>
+    <div class="credRole">CREATED BY</div>
+    <div class="credBig" style="font-size:clamp(22px,5vw,42px);color:#ff6b00">ARPIT</div>
+    <div class="settDivider" style="margin:18px 0; max-width:280px"></div>
+    <div class="credRole" style="margin-bottom:6px">BUILT WITH</div>
+    <div class="credLine">HTML5 CANVAS · WEB AUDIO API · VANILLA JS</div>
+    <div class="credLine" style="margin-top:4px">NO LIBRARIES · SINGLE FILE</div>
+    <div class="settDivider" style="margin:18px 0; max-width:280px"></div>
+    <div class="credLine" style="color:rgba(255,200,100,0.55);font-size:9px">VILLAINS: RADITZ · NAPPA · VEGETA · FRIEZA · CELL</div>
+    <button class="btn" id="bCreditsBack" style="margin-top:18px">BACK</button>
+  </div>
+
+  <!-- SKILLS SCREEN -->
+  <div class="screen off" id="sSkills">
+    <h1 style="font-size:clamp(20px,4vw,36px)">SKILL TREE</h1>
+    <div id="skillPoints">SKILL POINTS: 0</div>
+    <div id="skillGrid"></div>
+    <button class="btn" id="bSkillsBack" style="margin-top:16px">BACK</button>
+  </div>
+
+  <!-- GAME COMPLETE -->
+  <div class="screen off" id="sComplete">
+    <h1 style="color:#ffe234;text-shadow:0 0 22px #ffe234,0 0 44px #ff880088">LEGEND!</h1>
+    <h2 id="completeMsg">YOU HAVE SURPASSED ALL LIMITS!</h2>
+    <div id="completeScore" style="color:#ffe234;font-size:19px;margin-bottom:8px"></div>
+    <div id="completeHs" style="color:#ff9900;font-size:13px;letter-spacing:2px;margin-bottom:22px"></div>
+    <button class="btn" id="bCompleteMenu">MAIN MENU</button>
+    <div style="margin-top:22px;color:rgba(255,200,100,0.45);font-size:10px;letter-spacing:3px">CREATED BY ARPIT</div>
+  </div>
+
+  <!-- LEVEL CLEAR -->
+  <div class="screen off" id="sLevelClear">
+    <div style="font-size:clamp(11px,2vw,14px);letter-spacing:5px;color:#ff6b00;margin-bottom:8px">LEVEL CLEARED</div>
+    <h1 id="lcBossName" style="font-size:clamp(22px,5vw,52px);margin-bottom:4px">RADITZ DEFEATED!</h1>
+    <div id="lcScore" style="color:#ffe234;font-size:17px;letter-spacing:2px;margin-bottom:6px"></div>
+    <div id="lcBonus" style="color:#ff9900;font-size:12px;letter-spacing:2px;margin-bottom:6px"></div>
+    <div id="lcSkillUnlock" style="color:#00ff88;font-size:11px;letter-spacing:2px;margin-bottom:20px;min-height:18px"></div>
+    <button class="btn" id="bLevelNext" style="font-size:15px;padding:14px 38px">NEXT LEVEL ▶</button>
+    <button class="btn sec" id="bLevelMenu" style="margin-top:4px">MAIN MENU</button>
+    <div style="margin-top:20px;color:rgba(255,200,100,0.35);font-size:10px;letter-spacing:3px">CREATED BY ARPIT</div>
+  </div>
+
+  <!-- BOSS INTRO CUTSCENE -->
+  <div id="cutscene">
+    <div id="csLetterboxT"></div>
+    <div id="csAuraRing"></div>
+    <div id="csVillainName">RADITZ</div>
+    <div id="csIntroText">A SAIYAN WARRIOR DESCENDS!</div>
+    <div id="csSkipHint">TAP TO SKIP</div>
+    <div id="csLetterboxB"></div>
+  </div>
+
+  <!-- VISUAL FX OVERLAYS -->
+  <div id="intro"><div id="introName">RADITZ</div></div>
+  <div id="comboFloat"></div>
+  <div id="kiFlash"></div>
+  <div id="ssjOverlay"></div>
+
+  <!-- SSJ TIMER HUD -->
+  <div id="ssjTimer">
+    <div style="text-align:center;letter-spacing:2px">⚡ SUPER SAIYAN</div>
+    <div id="ssjTimerBar"><div id="ssjTimerFill" style="width:100%"></div></div>
+  </div>
+
+  <!-- SKILL TOAST NOTIFICATION -->
+  <div id="skillToast"></div>
+
+  <!-- MOBILE CONTROLS -->
+  <div id="mobileCtrl">
+    <div class="dpad">
+      <div class="dp" id="dpL">◀</div>
+      <div class="dp" id="dpR">▶</div>
+      <div class="dp" id="dpU">▲</div>
+    </div>
+    <div class="abtns">
+      <div class="ab" id="abJump">JUMP</div>
+      <div class="ab" id="abAttack">HIT</div>
+      <div class="ab" id="abBlast">KI</div>
+      <div class="ab" id="abKame">KAME</div>
+      <div class="ab" id="abAir">AIR</div>
+    </div>
+    <div class="ab" id="abSSJ">⚡ SSJ</div>
+  </div>
+
+  <!-- v2 elements -->
+  <div id="chargeMeter">
+    <div id="chargeLabel">CHARGING</div>
+    <div id="chargeBar"><div id="chargeFill"></div></div>
+  </div>
+  <div id="hitPop"></div>
+  <div id="muteBtn" title="Mute/Unmute">🔊</div>
+  <div id="airFlash"></div>
+  <div id="comboHits">
+    <div id="comboHitsNum">0</div>
+    <div id="comboHitsLabel">HIT CHAIN</div>
+  </div>
+  <div id="lvlFlash"></div>
+  <div id="atkMode">⚡ SUPER SAIYAN MODE</div>
+
+  <!-- Branding -->
+  <div id="arpit" style="position:absolute;bottom:7px;right:10px;z-index:6;
+    font-size:9px;letter-spacing:2px;color:rgba(255,200,100,0.28);
+    pointer-events:none;font-family:'Courier New',monospace;text-transform:uppercase;">
+    Created by Arpit
+  </div>
+
+</div><!-- /#wrap -->
+
+<script src="game.js" defer></script>
+</body>
+</html>

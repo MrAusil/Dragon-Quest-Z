@@ -1,0 +1,11 @@
+{
+  "name": "Dragon Quest Z — The Saiyan Saga",
+  "short_name": "Dragon Quest Z",
+  "description": "A Dragon Ball Z inspired browser platformer by Arpit",
+  "start_url": "./index.html",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#000000",
+  "theme_color": "#ff6b00",
+  "icons": []
+}
