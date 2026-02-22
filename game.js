@@ -25,27 +25,50 @@ document.addEventListener('DOMContentLoaded', function () {
    + Level flash transition
    ========================================================================== */
 
-// ── Canvas bootstrap ──────────────────────────────────────────────────
+// ── Canvas bootstrap (mobile-first: GAME_VIEW only, logical resolution) ─
 var canvas = document.getElementById('c');
 if (!canvas) { console.error('FATAL: canvas missing'); return; }
 var ctx = canvas.getContext('2d', { willReadFrequently: false });
 if (!ctx) { console.error('FATAL: no 2d context'); return; }
 
 var VW = 0, VH = 0, DPR = 1;
+var LOGICAL_W = 1280, LOGICAL_H = 720;  // design resolution; aspect preserved, letterbox if needed
+var gameViewEl = null;
 
 function resizeCanvas() {
+  gameViewEl = document.getElementById('gameView');
+  if (!gameViewEl) {
+    WORLD_TOP_OFFSET = 0;
+    VW = window.innerWidth;
+    VH = window.innerHeight;
+    canvas.width  = Math.round(VW * (DPR = Math.min(window.devicePixelRatio || 1, 2)));
+    canvas.height = Math.round(VH * DPR);
+    canvas.style.width  = VW + 'px';
+    canvas.style.height = VH + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    return;
+  }
   DPR = Math.min(window.devicePixelRatio || 1, 2);
-  VW  = window.innerWidth;
-  VH  = window.innerHeight;
-  canvas.width  = Math.round(VW * DPR);
-  canvas.height = Math.round(VH * DPR);
-  canvas.style.width  = VW + 'px';
-  canvas.style.height = VH + 'px';
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  var r = gameViewEl.getBoundingClientRect();
+  var viewW = r.width;
+  var viewH = r.height;
+  if (viewW <= 0 || viewH <= 0) { viewW = window.innerWidth; viewH = window.innerHeight; }
+  var scale = Math.min(viewW / LOGICAL_W, viewH / LOGICAL_H, 2);
+  VW = LOGICAL_W;
+  VH = LOGICAL_H;
+  var bufW = Math.round(LOGICAL_W * scale * DPR);
+  var bufH = Math.round(LOGICAL_H * scale * DPR);
+  canvas.width  = bufW;
+  canvas.height = bufH;
+  canvas.style.width  = (LOGICAL_W * scale) + 'px';
+  canvas.style.height = (LOGICAL_H * scale) + 'px';
+  ctx.setTransform(scale * DPR, 0, 0, scale * DPR, 0, 0);
+  WORLD_TOP_OFFSET = WORLD_TOP;
 }
 resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
-console.log('Canvas initialized');
+window.addEventListener('orientationchange', function () { setTimeout(resizeCanvas, 150); });
+console.log('Canvas initialized (logical ' + LOGICAL_W + 'x' + LOGICAL_H + ')');
 
 // ── Utilities ─────────────────────────────────────────────────────────
 function clamp(v,lo,hi){ return Math.max(lo,Math.min(hi,v)); }
@@ -434,12 +457,18 @@ function checkOrientation() {
   if (!_isMobile) return;
   var rp = document.getElementById('rotatePrompt');
   if (!rp) return;
-  // Show rotate prompt only in portrait mode on mobile
   var isPortrait = window.innerHeight > window.innerWidth;
   rp.classList.toggle('show', isPortrait);
+  if (!isPortrait) {
+    var wrap = document.getElementById('wrap');
+    if (wrap) {
+      wrap.classList.add('orientation-fade');
+      setTimeout(function () { wrap.classList.remove('orientation-fade'); }, 400);
+    }
+  }
 }
 window.addEventListener('orientationchange', function(){
-  setTimeout(checkOrientation, 300);
+  setTimeout(function () { checkOrientation(); resizeCanvas(); }, 300);
 });
 window.addEventListener('resize', function(){
   checkOrientation();
@@ -919,6 +948,7 @@ function pUpdate(dt){
   }
 }
 function pDraw(){
+  var cx=cam.x,cy=cam.y||0;
   for(var i=0;i<_particles.length;i++){
     var p=_particles[i];
     ctx.save();
@@ -926,7 +956,7 @@ function pDraw(){
     if(p.glow){ctx.shadowColor=p.color;ctx.shadowBlur=11;}
     ctx.fillStyle=p.color;
     var s=p.size*Math.max(0.1,p.life);
-    ctx.beginPath(); ctx.arc(p.x,p.y,s*0.5,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(p.x-cx,p.y-cy,s*0.5,0,Math.PI*2); ctx.fill();
     ctx.restore();
   }
 }
@@ -951,37 +981,49 @@ Proj.prototype.update=function(dt){
   if(this.life<=0)this.dead=true;
 };
 Proj.prototype.draw=function(camX){
-  var sx=this.x-camX;
+  var cy=cam.y||0;
+  var sx=this.x-camX,sy=this.y-cy;
   ctx.save();
   for(var i=0;i<this.tx.length;i++){
     var t=1-i/this.tx.length;
     ctx.globalAlpha=t*0.3; ctx.fillStyle=this.color;
-    ctx.beginPath(); ctx.arc(this.tx[i]-camX,this.ty[i],this.r*t*0.6,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(this.tx[i]-camX,this.ty[i]-cy,this.r*t*0.6,0,Math.PI*2); ctx.fill();
   }
   ctx.globalAlpha=1;
   ctx.shadowColor=this.color; ctx.shadowBlur=this.isKame?26:13;
-  var g=ctx.createRadialGradient(sx,this.y,0,sx,this.y,this.r);
+  var g=ctx.createRadialGradient(sx,sy,0,sx,sy,this.r);
   g.addColorStop(0,'#fff'); g.addColorStop(0.45,this.color); g.addColorStop(1,this.color+'00');
   ctx.fillStyle=g;
-  ctx.beginPath(); ctx.arc(sx,this.y,this.r*(1+0.12*Math.sin(this.phase)),0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(sx,sy,this.r*(1+0.12*Math.sin(this.phase)),0,Math.PI*2); ctx.fill();
   ctx.restore();
 };
 
 /* ==========================================================================
-   CAMERA (unchanged from v1)
+   CAMERA — follows player, clamped to world and GAME_VIEW; hero always visible
    ========================================================================== */
-var cam={x:0,sx:0,sy:0,st:0,sa:0};
-function shakeScreen(amt,dur){cam.sa=amt;cam.st=dur;}
-function updateCam(dt,px,worldW){
-  var target=px-VW*0.35;
-  cam.x=lerp(cam.x,target,dt*7.5);
-  cam.x=clamp(cam.x,0,Math.max(0,worldW-VW));
-  if(cam.st>0){
-    cam.st-=dt;
-    var d=cam.st>0?cam.st/0.7:0;
-    cam.sx=rand(-cam.sa,cam.sa)*d;
-    cam.sy=rand(-cam.sa,cam.sa)*0.4*d;
-  } else {cam.sx=0;cam.sy=0;}
+var cam = { x: 0, y: 0, sx: 0, sy: 0, st: 0, sa: 0 };
+var WORLD_HEIGHT = 560;   // from level data (ground ~450 + margin)
+var WORLD_TOP = 80;       // letterbox when using logical resolution (GAME_VIEW)
+var WORLD_TOP_OFFSET = 0; // set in resizeCanvas when gameView present
+
+function shakeScreen(amt, dur) { cam.sa = amt; cam.st = dur; }
+
+function updateCam(dt, px, py, worldW) {
+  var targetX = px - VW * 0.35;
+  cam.x = lerp(cam.x, targetX, dt * 7.5);
+  cam.x = clamp(cam.x, 0, Math.max(0, worldW - VW));
+  var viewH = VH - (WORLD_TOP_OFFSET || 0) * 2;
+  if (viewH > 0 && WORLD_HEIGHT > viewH) {
+    var targetY = py - viewH * 0.5 - 24;
+    cam.y = lerp(cam.y, targetY, dt * 7.5);
+    cam.y = clamp(cam.y, 0, Math.max(0, WORLD_HEIGHT - viewH));
+  } else { cam.y = 0; }
+  if (cam.st > 0) {
+    cam.st -= dt;
+    var d = cam.st > 0 ? cam.st / 0.7 : 0;
+    cam.sx = rand(-cam.sa, cam.sa) * d;
+    cam.sy = rand(-cam.sa, cam.sa) * 0.4 * d;
+  } else { cam.sx = 0; cam.sy = 0; }
 }
 
 /* ==========================================================================
@@ -1394,9 +1436,10 @@ Player.prototype._state=function(){
   else this.state=this.powered?'powered':'idle';
 };
 
-// Draw (unchanged from v1)
+// Draw — uses cam.y so hero stays in visible band
 Player.prototype.draw=function(camX,t){
-  var sx=this.x-camX,sy=this.y;
+  var sy=(this.y-(cam.y||0));
+  var sx=this.x-camX;
   if(this.iT>0&&Math.floor(this.iT*11)%2===0){ctx.globalAlpha=0.28;}
   if(this.auraOn){
     var aR=this.w*0.88+Math.sin(this.auraP)*5;
@@ -1697,10 +1740,10 @@ Villain.prototype.takeDmg=function(amt){
   return true;
 };
 
-// Draw (unchanged from v1)
+// Draw — uses cam.y for visibility band
 Villain.prototype.draw=function(camX,t){
   if(this.dead&&this.deadT>1.6)return;
-  var sx=this.x-camX,sy=this.y;
+  var sx=this.x-camX,sy=this.y-(cam.y||0);
   if(this.dead)ctx.globalAlpha=Math.max(0,1-this.deadT);
   if(this.hitFlash>0)ctx.globalAlpha*=(0.48+this.hitFlash*0.52);
   ctx.save();
@@ -1902,6 +1945,7 @@ function loadLevel(idx){
   SSJ.reset();
   GS.villain=new Villain(cfg.vil);
   cam.x=clamp(cfg.ps.x-VW*0.35,0,cfg.worldW-VW);
+  cam.y=0;
   document.getElementById('lvlTag').textContent='LEVEL '+(idx+1)+' / '+LEVELS.length;
   document.getElementById('bossLbl').textContent=cfg.vil.name;
   // Switch BGM theme
@@ -2279,31 +2323,33 @@ function drawBG(cfg,camX,t){
 
 function drawPlat(plat,camX){
   if(!plat)return;
+  var cy=cam.y||0;
   for(var i=0;i<plat.length;i++){
     var p=plat[i];if(!p)continue;
     var sx=p.x-camX;
+    var sy=p.y-cy;
     if(sx+p.w<-10||sx>VW+10)continue;
     ctx.shadowBlur=0;
     if(p.ground){
-      ctx.fillStyle=p.color||'#2d5a1b';ctx.fillRect(sx,p.y,p.w,p.h);
-      ctx.fillStyle='rgba(255,255,255,0.06)';ctx.fillRect(sx,p.y,p.w,5);
-      ctx.fillStyle=p.dk||'#153010';ctx.fillRect(sx,p.y+7,p.w,p.h-7);
+      ctx.fillStyle=p.color||'#2d5a1b';ctx.fillRect(sx,sy,p.w,p.h);
+      ctx.fillStyle='rgba(255,255,255,0.06)';ctx.fillRect(sx,sy,p.w,5);
+      ctx.fillStyle=p.dk||'#153010';ctx.fillRect(sx,sy+7,p.w,p.h-7);
     } else {
       ctx.shadowColor=p.color||'#4a7a2b';ctx.shadowBlur=5;
-      ctx.fillStyle=p.color||'#4a7a2b';ctx.fillRect(sx,p.y,p.w,p.h);
+      ctx.fillStyle=p.color||'#4a7a2b';ctx.fillRect(sx,sy,p.w,p.h);
       ctx.shadowBlur=0;
-      ctx.fillStyle='rgba(255,255,255,0.11)';ctx.fillRect(sx+2,p.y+2,p.w-4,3);
-      ctx.fillStyle='rgba(0,0,0,0.32)';ctx.fillRect(sx,p.y+13,p.w,7);
+      ctx.fillStyle='rgba(255,255,255,0.11)';ctx.fillRect(sx+2,sy+2,p.w-4,3);
+      ctx.fillStyle='rgba(0,0,0,0.32)';ctx.fillRect(sx,sy+13,p.w,7);
     }
   }ctx.shadowBlur=0;
 }
 
 function drawPU(cfg,camX,t){
   if(GS.puDone||!cfg.pu)return;
-  var pu=cfg.pu,sx=pu.x-camX;
+  var pu=cfg.pu,sx=pu.x-camX,sy=(pu.y-(cam.y||0));
   if(sx<-30||sx>VW+30)return;
   var pulse=Math.sin(t*3.8)*4;
-  ctx.save();ctx.translate(sx,pu.y+pulse);
+  ctx.save();ctx.translate(sx,sy+pulse);
   ctx.shadowColor='#ffee00';ctx.shadowBlur=18;
   ctx.strokeStyle='#ffee00';ctx.lineWidth=2;
   ctx.beginPath();ctx.arc(0,0,17,0,Math.PI*2);ctx.stroke();
@@ -2335,7 +2381,7 @@ function update(dt){
   if(GS.state===STATE.VICTORY){
     p.update(dt,plat);
     pUpdate(dt);
-    updateCam(dt,p.x,cfg.worldW);
+    updateCam(dt,p.x,p.y,cfg.worldW);
     updateHUD();
     flushInput();
     return;  // skip all attack / collision / defeat logic
@@ -2459,7 +2505,7 @@ function update(dt){
 
   // ── Particles + camera ───────────────────────────────────────────
   pUpdate(dt);
-  updateCam(dt,p.x,cfg.worldW);
+  updateCam(dt,p.x,p.y,cfg.worldW);
 
   // ── Combo float fade ──────────────────────────────────────────────
   if(_comboFT>0){
@@ -2494,6 +2540,7 @@ function draw(t){
   ctx.translate(cam.sx,cam.sy);
   var cx=cam.x;
   drawBG(cfg,cx,t);
+  ctx.translate(0, WORLD_TOP_OFFSET);
   drawPlat(cfg.plat,cx);
   drawPU(cfg,cx,t);
   pDraw();

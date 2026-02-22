@@ -13,30 +13,74 @@
 </head>
 <body>
 <div id="wrap">
-  <canvas id="c"></canvas>
+  <!-- GAME_VIEW: top ~78% — canvas + HUD only; gameplay never under UI -->
+  <div id="gameView">
+    <canvas id="c"></canvas>
+    <!-- HUD: inside game view so it never blocks controls -->
+    <div id="hud">
+      <div class="panel">
+        <div class="pname" id="hudPlayerName">☯ GOKU</div>
+        <div class="lbl">HP</div><div class="bar"><div class="fill" id="fHP" style="width:100%"></div></div>
+        <div class="lbl">KI</div><div class="bar"><div class="fill" id="fKI" style="width:100%"></div></div>
+      </div>
+      <div class="panel" id="scorePnl">
+        <div class="lbl" id="lvlTag">LEVEL 1</div>
+        <div id="scoreNum">000000</div>
+        <div id="comboTag"></div>
+      </div>
+    </div>
+    <div id="bossPnl">
+      <div class="lbl" id="bossLbl">RADITZ</div>
+      <div class="bar" style="height:13px"><div class="fill" id="fBoss" style="width:100%"></div></div>
+    </div>
+    <!-- In-game overlays (stay in game view) -->
+    <div id="chargeMeter">
+      <div id="chargeLabel">CHARGING</div>
+      <div id="chargeBar"><div id="chargeFill"></div></div>
+    </div>
+    <div id="hitPop"></div>
+    <div id="muteBtn" title="Mute/Unmute">🔊</div>
+    <div id="airFlash"></div>
+    <div id="comboHits">
+      <div id="comboHitsNum">0</div>
+      <div id="comboHitsLabel">HIT CHAIN</div>
+    </div>
+    <div id="lvlFlash"></div>
+    <div id="atkMode">⚡ SUPER SAIYAN MODE</div>
+    <div id="ssjTimer">
+      <div style="text-align:center;letter-spacing:2px">⚡ SUPER SAIYAN</div>
+      <div id="ssjTimerBar"><div id="ssjTimerFill" style="width:100%"></div></div>
+    </div>
+    <div id="intro"><div id="introName">RADITZ</div></div>
+    <div id="comboFloat"></div>
+    <div id="kiFlash"></div>
+    <div id="ssjOverlay"></div>
+  </div>
+
+  <!-- UI_VIEW: bottom ~22% — touch controls only; never overlap gameplay -->
+  <div id="uiView">
+    <div id="arpit" style="position:absolute;bottom:6px;right:10px;z-index:6;font-size:9px;letter-spacing:2px;color:rgba(255,200,100,0.28);pointer-events:none;font-family:'Courier New',monospace;text-transform:uppercase;">Created by Arpit</div>
+    <div id="mobileCtrl">
+      <div class="dpad">
+        <div class="dp" id="dpL">◀</div>
+        <div class="dp" id="dpR">▶</div>
+        <div class="dp" id="dpU">▲</div>
+      </div>
+      <div class="abtns">
+        <div class="ab" id="abJump">JUMP</div>
+        <div class="ab" id="abAttack">HIT</div>
+        <div class="ab" id="abBlast">KI</div>
+        <div class="ab" id="abKame">KAME</div>
+        <div class="ab" id="abAir">AIR</div>
+      </div>
+      <div class="ab" id="abSSJ">⚡ SSJ</div>
+    </div>
+  </div>
 
   <!-- ROTATE PROMPT (portrait mode on mobile) -->
   <div id="rotatePrompt">
     <div class="ri">📱</div>
     <p>ROTATE YOUR DEVICE<br>TO LANDSCAPE</p>
-  </div>
-
-  <!-- HUD -->
-  <div id="hud">
-    <div class="panel">
-      <div class="pname" id="hudPlayerName">☯ GOKU</div>
-      <div class="lbl">HP</div><div class="bar"><div class="fill" id="fHP" style="width:100%"></div></div>
-      <div class="lbl">KI</div><div class="bar"><div class="fill" id="fKI" style="width:100%"></div></div>
-    </div>
-    <div class="panel" id="scorePnl">
-      <div class="lbl" id="lvlTag">LEVEL 1</div>
-      <div id="scoreNum">000000</div>
-      <div id="comboTag"></div>
-    </div>
-  </div>
-  <div id="bossPnl">
-    <div class="lbl" id="bossLbl">RADITZ</div>
-    <div class="bar" style="height:13px"><div class="fill" id="fBoss" style="width:100%"></div></div>
   </div>
 
   <!-- TITLE / MAIN MENU -->
@@ -161,59 +205,8 @@
     <div id="csLetterboxB"></div>
   </div>
 
-  <!-- VISUAL FX OVERLAYS -->
-  <div id="intro"><div id="introName">RADITZ</div></div>
-  <div id="comboFloat"></div>
-  <div id="kiFlash"></div>
-  <div id="ssjOverlay"></div>
-
-  <!-- SSJ TIMER HUD -->
-  <div id="ssjTimer">
-    <div style="text-align:center;letter-spacing:2px">⚡ SUPER SAIYAN</div>
-    <div id="ssjTimerBar"><div id="ssjTimerFill" style="width:100%"></div></div>
-  </div>
-
-  <!-- SKILL TOAST NOTIFICATION -->
+  <!-- SKILL TOAST NOTIFICATION (full-screen overlay) -->
   <div id="skillToast"></div>
-
-  <!-- MOBILE CONTROLS -->
-  <div id="mobileCtrl">
-    <div class="dpad">
-      <div class="dp" id="dpL">◀</div>
-      <div class="dp" id="dpR">▶</div>
-      <div class="dp" id="dpU">▲</div>
-    </div>
-    <div class="abtns">
-      <div class="ab" id="abJump">JUMP</div>
-      <div class="ab" id="abAttack">HIT</div>
-      <div class="ab" id="abBlast">KI</div>
-      <div class="ab" id="abKame">KAME</div>
-      <div class="ab" id="abAir">AIR</div>
-    </div>
-    <div class="ab" id="abSSJ">⚡ SSJ</div>
-  </div>
-
-  <!-- v2 elements -->
-  <div id="chargeMeter">
-    <div id="chargeLabel">CHARGING</div>
-    <div id="chargeBar"><div id="chargeFill"></div></div>
-  </div>
-  <div id="hitPop"></div>
-  <div id="muteBtn" title="Mute/Unmute">🔊</div>
-  <div id="airFlash"></div>
-  <div id="comboHits">
-    <div id="comboHitsNum">0</div>
-    <div id="comboHitsLabel">HIT CHAIN</div>
-  </div>
-  <div id="lvlFlash"></div>
-  <div id="atkMode">⚡ SUPER SAIYAN MODE</div>
-
-  <!-- Branding -->
-  <div id="arpit" style="position:absolute;bottom:7px;right:10px;z-index:6;
-    font-size:9px;letter-spacing:2px;color:rgba(255,200,100,0.28);
-    pointer-events:none;font-family:'Courier New',monospace;text-transform:uppercase;">
-    Created by Arpit
-  </div>
 
 </div><!-- /#wrap -->
 
