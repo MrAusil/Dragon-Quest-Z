@@ -21,6 +21,32 @@ html { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-are
   from { opacity: 0.7; }
   to { opacity: 1; }
 }
+@keyframes fadeInOut {
+  0% { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+  15% { opacity: 1; transform: translateX(-50%) translateY(0); }
+  85% { opacity: 1; }
+  100% { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+}
+#wrap:fullscreen,
+#wrap:-webkit-full-screen,
+#wrap:-ms-fullscreen {
+  width: 100%; height: 100%;
+}
+#wrap:fullscreen #gameView,
+#wrap:-webkit-full-screen #gameView,
+#wrap:-ms-fullscreen #gameView {
+  flex: 1;
+}
+#wrap:fullscreen #uiView,
+#wrap:-webkit-full-screen #uiView,
+#wrap:-ms-fullscreen #uiView {
+  flex: 0 0 0; overflow: hidden;
+}
+@media (min-width: 900px) and (pointer: fine) {
+  #gameView { flex: 1 1 100%; }
+  #uiView { flex: 0 0 0; min-height: 0; overflow: hidden; }
+}
+.screen { backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 #gameView {
   flex: 1 1 78%;
   min-height: 0;

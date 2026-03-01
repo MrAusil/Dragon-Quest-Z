@@ -12,63 +12,65 @@ document.addEventListener('DOMContentLoaded', function () {
 'use strict';
 
 /* ==========================================================================
-   DRAGON QUEST Z  v2.0  — Full Upgrade
-   New systems added (existing systems preserved):
-   + Audio engine (Web Audio API with safe fallback)
-   + 3-hit melee combo chain with knockback
-   + Air downward strike attack
-   + Kamehameha charge meter UI
-   + Frieza (Level 4) & Cell (Level 5) villains
-   + 4 new villain attack patterns: dashbeam, deathball, barrage, solarflare, spiralbeam
-   + Mute toggle
-   + Hit-chain combo HUD
-   + Level flash transition
+   DRAGON QUEST Z  v3.0  — Desktop-First Premium Build
+   + 1920x1080 base resolution, 720p→4K scaling, letterbox
+   + High-FPS loop (deltaTime, 60–144Hz), FPS debug (F3)
+   + Input Manager + full Gamepad API (Xbox/PS)
+   + Cinematic camera (look-ahead, smooth lerp)
+   + Object pooling (projectiles, particles)
+   + Damage numbers, fullscreen (F), desktop polish
    ========================================================================== */
 
-// ── Canvas bootstrap (mobile-first: GAME_VIEW only, logical resolution) ─
+// ── PHASE 1: DESKTOP RESOLUTION & SCALING (1920x1080 base, letterbox, no stretch) ─
 var canvas = document.getElementById('c');
 if (!canvas) { console.error('FATAL: canvas missing'); return; }
 var ctx = canvas.getContext('2d', { willReadFrequently: false });
 if (!ctx) { console.error('FATAL: no 2d context'); return; }
 
 var VW = 0, VH = 0, DPR = 1;
-var LOGICAL_W = 1280, LOGICAL_H = 720;  // design resolution; aspect preserved, letterbox if needed
+var LOGICAL_W = 1920, LOGICAL_H = 1080;  // desktop base; supports 720p→4K, ultrawide
+var WORLD_HEIGHT = 560;  // level data ground ~450; used for letterbox
 var gameViewEl = null;
+var _canvasScale = 1;
+var _canvasOffsetX = 0, _canvasOffsetY = 0;
 
 function resizeCanvas() {
   gameViewEl = document.getElementById('gameView');
-  if (!gameViewEl) {
-    WORLD_TOP_OFFSET = 0;
-    VW = window.innerWidth;
-    VH = window.innerHeight;
-    canvas.width  = Math.round(VW * (DPR = Math.min(window.devicePixelRatio || 1, 2)));
-    canvas.height = Math.round(VH * DPR);
-    canvas.style.width  = VW + 'px';
-    canvas.style.height = VH + 'px';
-    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    return;
+  var containerW, containerH;
+  if (gameViewEl) {
+    var r = gameViewEl.getBoundingClientRect();
+    containerW = r.width;
+    containerH = r.height;
+    if (containerW <= 0 || containerH <= 0) {
+      containerW = window.innerWidth;
+      containerH = window.innerHeight;
+    }
+  } else {
+    containerW = window.innerWidth;
+    containerH = window.innerHeight;
   }
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
-  var r = gameViewEl.getBoundingClientRect();
-  var viewW = r.width;
-  var viewH = r.height;
-  if (viewW <= 0 || viewH <= 0) { viewW = window.innerWidth; viewH = window.innerHeight; }
-  var scale = Math.min(viewW / LOGICAL_W, viewH / LOGICAL_H, 2);
+  DPR = Math.min(window.devicePixelRatio || 1, 3);
+  var scaleFit = Math.min(containerW / LOGICAL_W, containerH / LOGICAL_H);
+  _canvasScale = scaleFit;
+  var drawW = Math.round(LOGICAL_W * scaleFit);
+  var drawH = Math.round(LOGICAL_H * scaleFit);
+  _canvasOffsetX = (containerW - drawW) / 2;
+  _canvasOffsetY = (containerH - drawH) / 2;
   VW = LOGICAL_W;
   VH = LOGICAL_H;
-  var bufW = Math.round(LOGICAL_W * scale * DPR);
-  var bufH = Math.round(LOGICAL_H * scale * DPR);
-  canvas.width  = bufW;
+  var bufW = Math.round(LOGICAL_W * scaleFit * DPR);
+  var bufH = Math.round(LOGICAL_H * scaleFit * DPR);
+  canvas.width = bufW;
   canvas.height = bufH;
-  canvas.style.width  = (LOGICAL_W * scale) + 'px';
-  canvas.style.height = (LOGICAL_H * scale) + 'px';
-  ctx.setTransform(scale * DPR, 0, 0, scale * DPR, 0, 0);
-  WORLD_TOP_OFFSET = WORLD_TOP;
+  canvas.style.width = drawW + 'px';
+  canvas.style.height = drawH + 'px';
+  ctx.setTransform(scaleFit * DPR, 0, 0, scaleFit * DPR, 0, 0);
+  WORLD_TOP_OFFSET = Math.max(0, (LOGICAL_H - WORLD_HEIGHT) / 2);
 }
 resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
 window.addEventListener('orientationchange', function () { setTimeout(resizeCanvas, 150); });
-console.log('Canvas initialized (logical ' + LOGICAL_W + 'x' + LOGICAL_H + ')');
+console.log('Canvas initialized (desktop ' + LOGICAL_W + 'x' + LOGICAL_H + ')');
 
 // ── Utilities ─────────────────────────────────────────────────────────
 function clamp(v,lo,hi){ return Math.max(lo,Math.min(hi,v)); }
@@ -87,6 +89,26 @@ function rrect(x,y,w,h,r){
   ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h); ctx.lineTo(x+r,y+h);
   ctx.quadraticCurveTo(x,y+h,x,y+h-r); ctx.lineTo(x,y+r);
   ctx.quadraticCurveTo(x,y,x+r,y); ctx.closePath();
+}
+
+/* ==========================================================================
+   PHASE 2: HIGH-FPS GAME LOOP — deltaTime-based, 60–144Hz, FPS debug
+   ========================================================================== */
+var TARGET_FPS = 60;
+var MAX_DT = 1 / 30;   // cap to prevent physics spikes
+var MIN_DT = 1 / 144;  // smooth on high refresh
+var _lastFrameTime = 0;
+var _accumulator = 0;
+var _fpsDebug = false;
+var _fpsCount = 0;
+var _fpsElapsed = 0;
+var _fpsDisplay = 0;
+
+function getDeltaTime(ts) {
+  if (_lastFrameTime === 0) _lastFrameTime = ts;
+  var raw = (ts - _lastFrameTime) / 1000;
+  _lastFrameTime = ts;
+  return Math.max(MIN_DT, Math.min(MAX_DT, raw));
 }
 
 /* ==========================================================================
@@ -691,8 +713,7 @@ var SSJ = (function(){
   }
 
   function handleInput(player) {
-    // Keyboard: T key
-    var tKey = Keys['t'] || Keys['T'] || JD['t'] || JD['T'];
+    var tKey = Keys['t'] || Keys['T'] || Keys['transform'] || JD['transform'] || GamepadInput.buttonJustDown('transform') || GamepadInput.button('transform');
     if (tKey && !_wasKey) {
       _wasKey = true;
       transform(player);
@@ -854,32 +875,91 @@ function showSkillToast(msg) {
 }
 
 /* ==========================================================================
-   INPUT SYSTEM
+   PHASE 4 & 5: KEYBOARD INPUT MANAGER + GAMEPAD API (desktop standard)
    ========================================================================== */
-var Keys={}, JD={}, JU={};
-// Mobile state — now includes 'air' for the air-attack button
-var Mob={left:false,right:false,up:false,attack:false,blast:false,special:false,air:false};
-var KMAP={
-  ArrowLeft:'left',ArrowRight:'right',ArrowUp:'up',ArrowDown:'down',
-  a:'left',d:'right',w:'up',s:'down',' ':'up',
-  j:'attack',k:'blast',l:'special',J:'attack',K:'blast',L:'special',
-  // 'i' triggers air attack on keyboard
-  i:'air',I:'air',
-  p:'pause',P:'pause',Escape:'pause'
+var Keys = {}, JD = {}, JU = {};
+var Mob = { left: false, right: false, up: false, attack: false, blast: false, special: false, air: false };
+var KMAP = {
+  ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down',
+  a: 'left', A: 'left', d: 'right', D: 'right', w: 'up', W: 'up', s: 'down', S: 'down',
+  ' ': 'up',
+  j: 'attack', J: 'attack', k: 'blast', K: 'blast', l: 'special', L: 'special',
+  i: 'air', I: 'air',
+  e: 'transform', E: 'transform', t: 'transform', T: 'transform',
+  p: 'pause', P: 'pause', Escape: 'pause',
+  f: 'fullscreen', F: 'fullscreen', F3: 'debug'
 };
+var _gameKeys = [' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'a', 'A', 'd', 'D', 'w', 'W', 's', 'S', 'j', 'J', 'k', 'K', 'l', 'L', 'i', 'I', 'e', 'E', 't', 'T', 'p', 'P', 'Escape', 'f', 'F', 'F3'];
 
-document.addEventListener('keydown',function(e){
-  var k=KMAP[e.key]||e.key;
-  if(!Keys[k])JD[k]=true;
-  Keys[k]=true;
-  // Resume audio on first real keypress
-  Audio.init(); Audio.resume();
-  if([' ','ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].indexOf(e.key)>=0)e.preventDefault();
+document.addEventListener('keydown', function (e) {
+  var k = KMAP[e.key] || e.key;
+  if (!Keys[k]) JD[k] = true;
+  Keys[k] = true;
+  Audio.init();
+  Audio.resume();
+  if (_gameKeys.indexOf(e.key) >= 0) e.preventDefault();
 });
-document.addEventListener('keyup',function(e){
-  var k=KMAP[e.key]||e.key;
-  JU[k]=true; Keys[k]=false;
+document.addEventListener('keyup', function (e) {
+  var k = KMAP[e.key] || e.key;
+  JU[k] = true;
+  Keys[k] = false;
 });
+
+// ── PHASE 5: Gamepad API — Xbox/PS/generic, dead zone, connection toast ─
+var GamepadInput = (function () {
+  var _connected = false;
+  var _lastConnected = false;
+  var _axes = [0, 0];
+  var _buttons = {};
+  var DEAD = 0.22;
+  var BUTTON_MAP = { 0: 'up', 1: 'blast', 2: 'attack', 3: 'transform', 4: 'special', 5: 'special', 6: 'pause', 7: 'pause', 8: 'pause', 9: 'pause' };
+
+  function poll() {
+    var gp = navigator.getGamepads && navigator.getGamepads()[0];
+    _connected = !!(gp && gp.connected);
+    if (!_connected) {
+      _axes[0] = _axes[1] = 0;
+      for (var b in _buttons) _buttons[b] = false;
+      return;
+    }
+    _axes[0] = Math.abs(gp.axes[0]) > DEAD ? gp.axes[0] : 0;
+    _axes[1] = Math.abs(gp.axes[1]) > DEAD ? gp.axes[1] : 0;
+    for (var i = 0; i < Math.min(gp.buttons.length, 16); i++) {
+      var v = gp.buttons[i];
+      var pressed = typeof v === 'object' ? v.pressed : v === 1;
+      var name = BUTTON_MAP[i] || ('btn' + i);
+      if (!_buttons[name]) _buttons[name] = { pressed: false, justDown: false };
+      _buttons[name].justDown = pressed && !_buttons[name].pressed;
+      _buttons[name].pressed = pressed;
+    }
+    if (_connected && !_lastConnected) {
+      _lastConnected = true;
+      showControllerConnected();
+    } else if (!_connected) _lastConnected = false;
+  }
+
+  function leftStickX() { return _axes[0]; }
+  function leftStickY() { return _axes[1]; }
+  function button(name) { return _buttons[name] ? _buttons[name].pressed : false; }
+  function buttonJustDown(name) { var b = _buttons[name]; return b ? b.justDown : false; }
+  function isConnected() { return _connected; }
+
+  return { poll: poll, leftStickX: leftStickX, leftStickY: leftStickY, button: button, buttonJustDown: buttonJustDown, isConnected: isConnected };
+})();
+
+function showControllerConnected() {
+  var el = document.getElementById('controllerToast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'controllerToast';
+    el.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:rgba(0,180,80,0.9);color:#fff;padding:10px 24px;border-radius:8px;font-size:14px;z-index:9999;pointer-events:none;animation:fadeInOut 2.5s ease forwards;';
+    document.body.appendChild(el);
+  }
+  el.textContent = 'Controller connected';
+  el.style.animation = 'none';
+  el.offsetHeight;
+  el.style.animation = 'fadeInOut 2.5s ease forwards';
+}
 
 function bindMob(id,prop){
   var el=document.getElementById(id); if(!el)return;
@@ -901,19 +981,26 @@ bindMob('dpL','left'); bindMob('dpR','right'); bindMob('dpU','up');
 bindMob('abJump','up'); bindMob('abAttack','attack'); bindMob('abBlast','blast');
 bindMob('abKame','special'); bindMob('abAir','air');
 
-var In={
-  left:    function(){return !!(Keys.left||Mob.left);},
-  right:   function(){return !!(Keys.right||Mob.right);},
-  up:      function(){return !!(Keys.up||Mob.up);},
-  attack:  function(){return !!(Keys.attack||Mob.attack);},
-  blast:   function(){return !!(Keys.blast||Mob.blast);},
-  special: function(){return !!(Keys.special||Mob.special);},
-  air:     function(){return !!(Keys.air||Mob.air);},
-  jd:      function(k){return !!JD[k];},
-  wasUp:   function(){return !!(JD.up);},
-  wasAir:  function(){return !!(JD.air);}
+var In = {
+  left:    function () { return !!(Keys.left || Mob.left || GamepadInput.leftStickX() < -0.5); },
+  right:   function () { return !!(Keys.right || Mob.right || GamepadInput.leftStickX() > 0.5); },
+  up:      function () { return !!(Keys.up || Mob.up || GamepadInput.button('up')); },
+  attack:  function () { return !!(Keys.attack || Mob.attack || GamepadInput.button('attack')); },
+  blast:   function () { return !!(Keys.blast || Mob.blast || GamepadInput.button('blast')); },
+  special: function () { return !!(Keys.special || Mob.special || GamepadInput.button('special')); },
+  air:     function () { return !!(Keys.air || Mob.air); },
+  jd:      function (k) { return !!JD[k]; },
+  wasUp:   function () { return !!(JD.up || GamepadInput.buttonJustDown('up')); },
+  wasAir:  function () { return !!JD.air; }
 };
-function flushInput(){ for(var k in JD)delete JD[k]; for(var k in JU)delete JU[k]; }
+function flushInput() { for (var k in JD) delete JD[k]; for (var k in JU) delete JU[k]; }
+
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    var wrap = document.getElementById('wrap');
+    if (wrap && wrap.requestFullscreen) wrap.requestFullscreen().catch(function () {});
+  } else if (document.exitFullscreen) document.exitFullscreen();
+}
 
 /* ==========================================================================
    PHYSICS CONSTANTS
@@ -921,30 +1008,47 @@ function flushInput(){ for(var k in JD)delete JD[k]; for(var k in JU)delete JU[k
 var GRAV=1380, MAX_FALL=880, FRIC_GND=0.80, FRIC_AIR=0.96;
 
 /* ==========================================================================
-   PARTICLE SYSTEM (unchanged from v1)
+   PHASE 7: PARTICLE SYSTEM + OBJECT POOL (minimize GC)
    ========================================================================== */
-var _particles=[];
-function pSpawn(x,y,opts){
-  if(!isFinite(x)||!isFinite(y))return;
-  opts=opts||{};
-  var n=opts.n||1;
-  for(var i=0;i<n;i++){
-    var ang=opts.angle!==undefined?opts.angle+rand(-(opts.spread||0),(opts.spread||0)):Math.random()*Math.PI*2;
-    var spd=rand(opts.minSpd||40,opts.maxSpd||140);
-    _particles.push({x:x,y:y,
-      vx:Math.cos(ang)*spd+(opts.vx||0),vy:Math.sin(ang)*spd+(opts.vy||0),
-      life:1,ml:rand(opts.minLife||0.25,opts.maxLife||0.65),
-      size:opts.size||rand(3,8),color:opts.color||'#fff',
-      grav:opts.grav!==undefined?opts.grav:180,glow:!!opts.glow});
+var _particles = [];
+var _particlePool = [];
+var PARTICLE_POOL_MAX = 400;
+
+function _pAlloc() {
+  if (_particlePool.length > 0) return _particlePool.pop();
+  return { x: 0, y: 0, vx: 0, vy: 0, life: 1, ml: 1, size: 4, color: '#fff', grav: 180, glow: false };
+}
+
+function pSpawn(x, y, opts) {
+  if (!isFinite(x) || !isFinite(y)) return;
+  opts = opts || {};
+  var n = Math.min(opts.n || 1, 50);
+  for (var i = 0; i < n; i++) {
+    var ang = opts.angle !== undefined ? opts.angle + rand(-(opts.spread || 0), (opts.spread || 0)) : Math.random() * Math.PI * 2;
+    var spd = rand(opts.minSpd || 40, opts.maxSpd || 140);
+    var p = _pAlloc();
+    p.x = x; p.y = y;
+    p.vx = Math.cos(ang) * spd + (opts.vx || 0);
+    p.vy = Math.sin(ang) * spd + (opts.vy || 0);
+    p.life = 1;
+    p.ml = rand(opts.minLife || 0.25, opts.maxLife || 0.65);
+    p.size = opts.size || rand(3, 8);
+    p.color = opts.color || '#fff';
+    p.grav = opts.grav !== undefined ? opts.grav : 180;
+    p.glow = !!opts.glow;
+    _particles.push(p);
   }
 }
-function pUpdate(dt){
-  for(var i=_particles.length-1;i>=0;i--){
-    var p=_particles[i];
-    p.x+=p.vx*dt; p.y+=p.vy*dt;
-    p.vy+=p.grav*dt; p.vx*=0.97;
-    p.life-=dt/p.ml;
-    if(p.life<=0)_particles.splice(i,1);
+function pUpdate(dt) {
+  for (var i = _particles.length - 1; i >= 0; i--) {
+    var p = _particles[i];
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    p.vy += p.grav * dt; p.vx *= 0.97;
+    p.life -= dt / p.ml;
+    if (p.life <= 0) {
+      _particles.splice(i, 1);
+      if (_particlePool.length < PARTICLE_POOL_MAX) _particlePool.push(p);
+    }
   }
 }
 function pDraw(){
@@ -962,15 +1066,37 @@ function pDraw(){
 }
 
 /* ==========================================================================
-   PROJECTILE CLASS (unchanged from v1)
+   PROJECTILE CLASS + PHASE 7 POOL
    ========================================================================== */
-function Proj(x,y,vx,vy,owner,opts){
-  opts=opts||{};
-  this.x=x; this.y=y; this.vx=vx; this.vy=vy; this.owner=owner;
-  this.dmg=opts.dmg||10; this.color=opts.color||'#ffff00';
-  this.r=opts.r||7; this.life=opts.life||1.4; this.grav=opts.grav||0;
-  this.isKame=!!opts.isKame; this.dead=false; this.phase=0;
-  this.tx=[]; this.ty=[];
+function Proj(x, y, vx, vy, owner, opts) {
+  opts = opts || {};
+  this.x = x; this.y = y; this.vx = vx; this.vy = vy; this.owner = owner;
+  this.dmg = opts.dmg || 10; this.color = opts.color || '#ffff00';
+  this.r = opts.r || 7; this.life = opts.life || 1.4; this.grav = opts.grav || 0;
+  this.isKame = !!opts.isKame; this.dead = false; this.phase = 0;
+  this.tx = []; this.ty = [];
+}
+Proj.prototype.reset = function (x, y, vx, vy, owner, opts) {
+  opts = opts || {};
+  this.x = x; this.y = y; this.vx = vx; this.vy = vy; this.owner = owner;
+  this.dmg = opts.dmg || 10; this.color = opts.color || '#ffff00';
+  this.r = opts.r || 7; this.life = opts.life || 1.4; this.grav = opts.grav || 0;
+  this.isKame = !!opts.isKame; this.dead = false; this.phase = 0;
+  this.tx.length = 0; this.ty.length = 0;
+};
+var _projPool = [];
+function ProjPoolGet(x, y, vx, vy, owner, opts) {
+  var p;
+  if (_projPool.length > 0) {
+    p = _projPool.pop();
+    p.reset(x, y, vx, vy, owner, opts);
+  } else {
+    p = new Proj(x, y, vx, vy, owner, opts);
+  }
+  return p;
+}
+function ProjPoolRelease(proj) {
+  if (_projPool.length < 80) _projPool.push(proj);
 }
 Proj.prototype.gb=function(){return{x:this.x-this.r,y:this.y-this.r,w:this.r*2,h:this.r*2};};
 Proj.prototype.update=function(dt){
@@ -1002,14 +1128,47 @@ Proj.prototype.draw=function(camX){
    CAMERA — follows player, clamped to world and GAME_VIEW; hero always visible
    ========================================================================== */
 var cam = { x: 0, y: 0, sx: 0, sy: 0, st: 0, sa: 0 };
-var WORLD_HEIGHT = 560;   // from level data (ground ~450 + margin)
-var WORLD_TOP = 80;       // letterbox when using logical resolution (GAME_VIEW)
-var WORLD_TOP_OFFSET = 0; // set in resizeCanvas when gameView present
+var WORLD_TOP = 80;
+var WORLD_TOP_OFFSET = 0; // set in resizeCanvas
 
 function shakeScreen(amt, dur) { cam.sa = amt; cam.st = dur; }
 
-function updateCam(dt, px, py, worldW) {
-  var targetX = px - VW * 0.35;
+/* ==========================================================================
+   PHASE 8: Damage number pop-ups (desktop polish)
+   ========================================================================== */
+var _damageNumbers = [];
+function spawnDamageNum(x, y, value, color) {
+  _damageNumbers.push({ x: x, y: y, value: value, t: 0.9, color: color || '#ffe234' });
+}
+function updateDamageNumbers(dt) {
+  for (var i = _damageNumbers.length - 1; i >= 0; i--) {
+    _damageNumbers[i].t -= dt;
+    _damageNumbers[i].y -= 45 * dt;
+    if (_damageNumbers[i].t <= 0) _damageNumbers.splice(i, 1);
+  }
+}
+function drawDamageNumbers(cx) {
+  var cy0 = cam.y || 0;
+  for (var i = 0; i < _damageNumbers.length; i++) {
+    var d = _damageNumbers[i];
+    var sx = d.x - cx;
+    var sy = d.y - cy0 - 20;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, d.t / 0.3);
+    ctx.font = 'bold 22px monospace';
+    ctx.fillStyle = d.color;
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 3;
+    ctx.textAlign = 'center';
+    ctx.strokeText('' + d.value, sx, sy);
+    ctx.fillText('' + d.value, sx, sy);
+    ctx.restore();
+  }
+}
+
+function updateCam(dt, px, py, worldW, facing) {
+  var lookAhead = (facing === 1 ? 1 : facing === -1 ? -1 : 0) * Math.min(120, VW * 0.08);
+  var targetX = px - VW * 0.35 + lookAhead;
   cam.x = lerp(cam.x, targetX, dt * 7.5);
   cam.x = clamp(cam.x, 0, Math.max(0, worldW - VW));
   var viewH = VH - (WORLD_TOP_OFFSET || 0) * 2;
@@ -1223,6 +1382,13 @@ Player.prototype.update=function(dt,plat){
   this._physics(dt);
   this._collide(plat);
   this._state();
+  if (this.grounded && this.state === 'run' && !this.dead) {
+    this.runDustT = (this.runDustT || 0) - dt;
+    if (this.runDustT <= 0) {
+      this.runDustT = 0.08;
+      pSpawn(this.x + this.w / 2, this.y + this.h, { n: 2, grav: 80, minLife: 0.15, maxLife: 0.3, color: '#886622', size: 4, minSpd: 5, maxSpd: 25, angle: -Math.PI / 2, spread: 0.4 });
+    }
+  }
 };
 
 /* ─────────────────────────────────────────────────────────────────────
@@ -1404,6 +1570,7 @@ Player.prototype._collide=function(plat){
 Player.prototype.takeDmg=function(amt,kx){
   if(this.iT>0||this.dead)return;
   amt = amt * (this.defMult || 1.0);
+  spawnDamageNum(this.x+this.w/2, this.y, Math.round(amt), '#ff4466');
   this.hp=Math.max(0,this.hp-amt);
   this.iT=1.15; this.hitT=0.22;
   this.vx=kx||(Math.random()<0.5?-240:240); this.vy=-280;
@@ -1628,20 +1795,20 @@ Villain.prototype._launch=function(player){
   switch(pat){
     /* ── Classic patterns (v1) ─────────────────────────────────── */
     case 'projectile':
-      this._projs.push(new Proj(px,py,(dx/d)*370,(dy/d)*370,'villain',
+      this._projs.push(ProjPoolGet(px,py,(dx/d)*370,(dy/d)*370,'villain',
         {dmg:this.dmg,color:this.aura,r:9,life:1.2}));
       this.atkCD=this.atkMax;break;
 
     case 'trishot':
       for(var a=-0.26;a<=0.26;a+=0.26){
         var ang=Math.atan2(dy,dx)+a;
-        this._projs.push(new Proj(px,py,Math.cos(ang)*345,Math.sin(ang)*345,'villain',
+        this._projs.push(ProjPoolGet(px,py,Math.cos(ang)*345,Math.sin(ang)*345,'villain',
           {dmg:this.dmg*0.72,color:this.aura,r:7,life:1.05}));
       }
       this.atkCD=this.atkMax*1.32;break;
 
     case 'groundwave':
-      this._projs.push(new Proj(px+this.facing*10,this.y+this.h-9,
+      this._projs.push(ProjPoolGet(px+this.facing*10,this.y+this.h-9,
         this.facing*415,0,'villain',{dmg:this.dmg*1.18,color:this.aura,r:12,life:1.45}));
       shakeScreen(5,0.28);
       pSpawn(px,this.y+this.h,{n:11,grav:-75,minLife:0.5,maxLife:0.7,color:this.aura,
@@ -1651,14 +1818,14 @@ Villain.prototype._launch=function(player){
     case 'airburst':
       if(this.grounded)this.vy=this.jpow*0.88;
       for(var aa=0;aa<Math.PI*2;aa+=Math.PI/4)
-        this._projs.push(new Proj(px,py-18,Math.cos(aa)*295,Math.sin(aa)*295,'villain',
+        this._projs.push(ProjPoolGet(px,py-18,Math.cos(aa)*295,Math.sin(aa)*295,'villain',
           {dmg:this.dmg*0.62,color:this.aura,r:7,life:0.88}));
       shakeScreen(7,0.33);this.atkCD=this.atkMax*1.78;break;
 
     case 'ultimate':
       for(var au=-0.48;au<=0.48;au+=0.24){
         var anu=Math.atan2(dy,dx)+au;
-        this._projs.push(new Proj(px,py,Math.cos(anu)*490,Math.sin(anu)*490,'villain',
+        this._projs.push(ProjPoolGet(px,py,Math.cos(anu)*490,Math.sin(anu)*490,'villain',
           {dmg:this.dmg*1.48,color:'#fff',r:13,life:1.38,isKame:true}));
       }
       shakeScreen(11,0.65);
@@ -1672,7 +1839,7 @@ Villain.prototype._launch=function(player){
       // Fire 2 thin beams after a tiny delay (telegraph then release)
       for(var db=0;db<2;db++){
         var dbAng=Math.atan2(dy,dx)+(db===0?0.1:-0.1);
-        this._projs.push(new Proj(px,py,Math.cos(dbAng)*560,Math.sin(dbAng)*560,'villain',
+        this._projs.push(ProjPoolGet(px,py,Math.cos(dbAng)*560,Math.sin(dbAng)*560,'villain',
           {dmg:this.dmg*0.85,color:'#ff88cc',r:5,life:0.88}));
       }
       this.atkCD=this.atkMax*0.82;break;
@@ -1683,7 +1850,7 @@ Villain.prototype._launch=function(player){
       for(var br=0;br<5;br++){
         var brAng=Math.atan2(dy,dx)+rand(-0.18,0.18);
         // Stagger the projs slightly by reducing life on early ones
-        this._projs.push(new Proj(px,py,Math.cos(brAng)*400,Math.sin(brAng)*400,'villain',
+        this._projs.push(ProjPoolGet(px,py,Math.cos(brAng)*400,Math.sin(brAng)*400,'villain',
           {dmg:this.dmg*0.45,color:'#ff4488',r:6,life:0.75+br*0.08}));
       }
       pSpawn(px,py,{n:8,grav:0,minLife:0.3,maxLife:0.45,color:'#ff88cc',size:5,glow:true,minSpd:40,maxSpd:120});
@@ -1692,7 +1859,7 @@ Villain.prototype._launch=function(player){
     /* ── NEW: deathball (Frieza) ────────────────────────────────
        Large slow homing orb that bounces off the ground.         */
     case 'deathball':
-      this._projs.push(new Proj(px,py-20,(dx/d)*180,(dy/d)*180,'villain',
+      this._projs.push(ProjPoolGet(px,py-20,(dx/d)*180,(dy/d)*180,'villain',
         {dmg:this.dmg*2.2,color:'#ff2266',r:22,life:2.8,grav:180,isKame:true}));
       shakeScreen(8,0.5);
       pSpawn(px,py,{n:18,grav:0,minLife:0.7,maxLife:1.0,color:'#ff2266',size:14,glow:true,minSpd:40,maxSpd:150});
@@ -1718,7 +1885,7 @@ Villain.prototype._launch=function(player){
     case 'spiralbeam':
       for(var sp=0;sp<6;sp++){
         var spAng=Math.atan2(dy,dx)+(sp*(Math.PI*2/6));
-        this._projs.push(new Proj(px,py,Math.cos(spAng)*320,Math.sin(spAng)*320,'villain',
+        this._projs.push(ProjPoolGet(px,py,Math.cos(spAng)*320,Math.sin(spAng)*320,'villain',
           {dmg:this.dmg*0.7,color:'#66ff44',r:8,life:1.1}));
       }
       shakeScreen(6,0.35);
@@ -1729,6 +1896,7 @@ Villain.prototype._launch=function(player){
 
 Villain.prototype.takeDmg=function(amt){
   if(this.iT>0||this.dead)return false;
+  spawnDamageNum(this.x+this.w/2, this.y, Math.round(amt), this.aura);
   this.hp=Math.max(0,this.hp-amt);
   this.iT=0.14;this.hitFlash=1;this.hitT=0.18;
   this._cs('hit');
@@ -2364,9 +2532,14 @@ function drawPU(cfg,camX,t){
    MAIN UPDATE LOOP — state-machine gated
    ========================================================================== */
 function update(dt){
-  // Only run game logic during PLAYING or VICTORY (villain death animation)
-  // VICTORY: player can still move, physics runs, but attacks are blocked
-  // LVL_TRANS / COMPLETE / GAMEOVER / PAUSED / TITLE: all frozen
+  GamepadInput.poll();
+  if (In.jd('debug')) _fpsDebug = !_fpsDebug;
+  if (In.jd('fullscreen')) toggleFullscreen();
+  if (GamepadInput.buttonJustDown('pause')) {
+    if (GS.state === STATE.PLAYING) { GS.state = STATE.PAUSED; showScreen('sPause'); Audio.resume(); }
+    else if (GS.state === STATE.PAUSED) { GS.state = STATE.PLAYING; showScreen(null); }
+    else if (GS.state === STATE.LVL_TRANS || GS.state === STATE.COMPLETE) { GS.state = STATE.TITLE; showScreen('sTitle'); Audio.stopBGM(); }
+  }
   if(GS.state!==STATE.PLAYING&&GS.state!==STATE.VICTORY)return;
 
   var p=GS.player,v=GS.villain,cfg=GS.cfg;
@@ -2381,7 +2554,8 @@ function update(dt){
   if(GS.state===STATE.VICTORY){
     p.update(dt,plat);
     pUpdate(dt);
-    updateCam(dt,p.x,p.y,cfg.worldW);
+    updateDamageNumbers(dt);
+    updateCam(dt,p.x,p.y,cfg.worldW,p.facing);
     updateHUD();
     flushInput();
     return;  // skip all attack / collision / defeat logic
@@ -2394,11 +2568,11 @@ function update(dt){
 
   // ── Dispatch pending attacks ──────────────────────────────────────
   if(p._blast){
-    GS.projs.push(new Proj(p._blast.x,p._blast.y,p._blast.vx,p._blast.vy,'player',p._blast.opts));
+    GS.projs.push(ProjPoolGet(p._blast.x,p._blast.y,p._blast.vx,p._blast.vy,'player',p._blast.opts));
     p._blast=null;
   }
   if(p._kame){
-    GS.projs.push(new Proj(p._kame.x,p._kame.y,p._kame.vx,p._kame.vy,'player',p._kame.opts));
+    GS.projs.push(ProjPoolGet(p._kame.x,p._kame.y,p._kame.vx,p._kame.vy,'player',p._kame.opts));
     p._kame=null;
   }
 
@@ -2469,19 +2643,19 @@ function update(dt){
         }
       }
     }
-    if(pr.dead){GS.projs.splice(pi,1);continue;}
+    if(pr.dead){ ProjPoolRelease(pr); GS.projs.splice(pi,1); continue; }
     if(pr.owner==='player'&&v&&!v.dead&&overlap(pr.gb(),v.gb())){
       if(v.takeDmg(pr.dmg)){
         GS.score+=pr.isKame?28:13;p.combo++;p.comboT=1.8;showCombo(p.combo);
         pSpawn(pr.x,pr.y,{n:9,grav:45,minLife:0.4,maxLife:0.6,color:pr.color,size:8,glow:true,minSpd:55,maxSpd:195});
       }
-      pr.dead=true;GS.projs.splice(pi,1);continue;
+      pr.dead=true; ProjPoolRelease(pr); GS.projs.splice(pi,1); continue;
     }
     if(pr.owner==='villain'&&!p.dead&&overlap(pr.gb(),p.gb())){
       // Solarflare makes player unable to dodge but still takes damage
       p.takeDmg(pr.dmg,pr.vx*0.28);
       pSpawn(pr.x,pr.y,{n:7,grav:70,minLife:0.32,maxLife:0.5,color:pr.color,size:7,glow:true,minSpd:45,maxSpd:150});
-      pr.dead=true;GS.projs.splice(pi,1);continue;
+      pr.dead=true; ProjPoolRelease(pr); GS.projs.splice(pi,1); continue;
     }
   }
 
@@ -2503,9 +2677,10 @@ function update(dt){
     setTimeout(function(){if(GS.state===STATE.PLAYING)doGameOver();},1600);
   }
 
-  // ── Particles + camera ───────────────────────────────────────────
+  // ── Particles + camera + damage numbers ───────────────────────────
   pUpdate(dt);
-  updateCam(dt,p.x,p.y,cfg.worldW);
+  updateDamageNumbers(dt);
+  updateCam(dt,p.x,p.y,cfg.worldW,p.facing);
 
   // ── Combo float fade ──────────────────────────────────────────────
   if(_comboFT>0){
@@ -2547,6 +2722,7 @@ function draw(t){
   if(p){try{p.draw(cx,t);}catch(e){console.error('player draw',e);}}
   if(v){try{v.draw(cx,t);}catch(e){console.error('villain draw',e);}}
   for(var i=0;i<GS.projs.length;i++){try{GS.projs[i].draw(cx);}catch(e){}}
+  drawDamageNumbers(cx);
 
   // ── Solarflare white-out vignette ─────────────────────────────────
   if(GS.solarflareT>0){
@@ -2579,13 +2755,31 @@ function draw(t){
 }
 
 /* ==========================================================================
-   GAME LOOP
+   GAME LOOP — high-FPS, deltaTime-based, FPS overlay
    ========================================================================== */
-var _lastTS=0,_loopT=0;
-function loop(ts){
-  var dt=Math.min((ts-_lastTS)/1000,0.05);
-  _lastTS=ts;_loopT+=dt;
-  update(dt);draw(_loopT);
+var _lastTS = 0, _loopT = 0;
+function loop(ts) {
+  var dt = getDeltaTime(ts);
+  _loopT += dt;
+  _fpsElapsed += dt;
+  _fpsCount++;
+  if (_fpsElapsed >= 0.5) {
+    _fpsDisplay = Math.round(_fpsCount / _fpsElapsed);
+    _fpsCount = 0;
+    _fpsElapsed = 0;
+  }
+  update(dt);
+  draw(_loopT);
+  if (_fpsDebug) {
+    ctx.save();
+    ctx.font = 'bold 18px monospace';
+    ctx.fillStyle = '#00ff44';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2;
+    ctx.strokeText('FPS: ' + _fpsDisplay, 14, 32);
+    ctx.fillText('FPS: ' + _fpsDisplay, 14, 32);
+    ctx.restore();
+  }
   requestAnimationFrame(loop);
 }
 
