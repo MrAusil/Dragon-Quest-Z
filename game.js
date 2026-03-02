@@ -95,7 +95,8 @@ function rrect(x,y,w,h,r){
    PHASE 2: HIGH-FPS GAME LOOP — deltaTime-based, 60–144Hz, FPS debug
    ========================================================================== */
 var TARGET_FPS = 60;
-var MAX_DT = 1 / 30;   // cap to prevent physics spikes
+// Cap max delta to avoid large physics steps after tab switch (0.1s)
+var MAX_DT = 0.1;   // cap to prevent physics spikes
 var MIN_DT = 1 / 144;  // smooth on high refresh
 var _lastFrameTime = 0;
 var _accumulator = 0;
@@ -108,7 +109,9 @@ function getDeltaTime(ts) {
   if (_lastFrameTime === 0) _lastFrameTime = ts;
   var raw = (ts - _lastFrameTime) / 1000;
   _lastFrameTime = ts;
-  return Math.max(MIN_DT, Math.min(MAX_DT, raw));
+  // Cap large jumps (e.g., after switching tabs) to MAX_DT
+  var capped = Math.min(raw, MAX_DT);
+  return Math.max(MIN_DT, capped);
 }
 
 /* ==========================================================================
@@ -964,15 +967,13 @@ function showControllerConnected() {
 function bindMob(id,prop){
   var el=document.getElementById(id); if(!el)return;
   function on(e){
-    e.preventDefault();
+    // Mouse support only (touch handled by TouchInputManager)
     Mob[prop]=true;
-    // Init audio on first touch
+    // Init audio on first interaction
     Audio.init(); Audio.resume();
   }
   function off(e){e.preventDefault();Mob[prop]=false;}
-  el.addEventListener('touchstart',on,{passive:false});
-  el.addEventListener('touchend',off,{passive:false});
-  el.addEventListener('touchcancel',off,{passive:false});
+  // Do not bind touch here to avoid conflicts with multi-touch manager
   el.addEventListener('mousedown',on);
   el.addEventListener('mouseup',off);
   el.addEventListener('mouseleave',off);
@@ -980,6 +981,79 @@ function bindMob(id,prop){
 bindMob('dpL','left'); bindMob('dpR','right'); bindMob('dpU','up');
 bindMob('abJump','up'); bindMob('abAttack','attack'); bindMob('abBlast','blast');
 bindMob('abKame','special'); bindMob('abAir','air');
+
+// Multi-touch manager: maps touches -> Mob state by tracking identifiers
+var TouchInputManager = (function(){
+  var touchMap = {}; // id -> prop
+  var zones = [
+    ['dpL','left'],['dpR','right'],['dpU','up'],['abJump','up'],['abAttack','attack'],['abBlast','blast'],['abKame','special'],['abAir','air'],['abSSJ','transform']
+  ];
+
+  function _elemForPoint(x,y){
+    for(var i=0;i<zones.length;i++){
+      var id = zones[i][0], prop = zones[i][1];
+      var el = document.getElementById(id);
+      if(!el) continue;
+      var r = el.getBoundingClientRect();
+      if(x>=r.left && x<=r.right && y>=r.top && y<=r.bottom) return {id:id,prop:prop};
+    }
+    return null;
+  }
+
+  function onTouchStart(e){
+    if(e&&e.preventDefault) e.preventDefault();
+    for(var i=0;i<e.changedTouches.length;i++){
+      var t = e.changedTouches[i];
+      var hit = _elemForPoint(t.clientX, t.clientY);
+      if(hit){ touchMap[t.identifier] = hit.prop; Mob[hit.prop] = true; Audio.init(); Audio.resume(); if(_fpsDebug) console.log('TOUCH START', t.identifier, hit.id, hit.prop); }
+    }
+  }
+  function onTouchMove(e){
+    if(e&&e.preventDefault) e.preventDefault();
+    for(var i=0;i<e.changedTouches.length;i++){
+      var t=e.changedTouches[i];
+      var prev = touchMap[t.identifier] || null;
+      var hit = _elemForPoint(t.clientX,t.clientY);
+      var nowProp = hit ? hit.prop : null;
+      if(prev !== nowProp){
+        if(prev) { Mob[prev] = false; if(_fpsDebug) console.log('TOUCH MOVE release', t.identifier, prev); }
+        if(nowProp){ Mob[nowProp] = true; touchMap[t.identifier]=nowProp; if(_fpsDebug) console.log('TOUCH MOVE press', t.identifier, hit.id, nowProp); }
+        else delete touchMap[t.identifier];
+      }
+    }
+  }
+  function onTouchEnd(e){
+    if(e&&e.preventDefault) e.preventDefault();
+    for(var i=0;i<e.changedTouches.length;i++){
+      var t=e.changedTouches[i];
+      var prop = touchMap[t.identifier];
+      if(prop){ Mob[prop]=false; if(_fpsDebug) console.log('TOUCH END', t.identifier, prop); }
+      delete touchMap[t.identifier];
+    }
+  }
+
+  function init(){
+    try{ document.body.style.touchAction = 'none'; }catch(e){}
+    var mctl = document.getElementById('mobileCtrl'); if(mctl) try{ mctl.style.touchAction = 'none'; }catch(e){}
+    document.addEventListener('touchstart', onTouchStart, {passive:false});
+    document.addEventListener('touchmove', onTouchMove, {passive:false});
+    document.addEventListener('touchend', onTouchEnd, {passive:false});
+    document.addEventListener('touchcancel', onTouchEnd, {passive:false});
+
+    // Mouse fallback for mobile buttons
+    zones.forEach(function(z){
+      var el = document.getElementById(z[0]); if(!el) return;
+      el.addEventListener('mousedown', function(e){ e.preventDefault(); Mob[z[1]] = true; Audio.init(); Audio.resume(); if(_fpsDebug) console.log('MOUSE DOWN', z[0], z[1]); });
+      el.addEventListener('mouseup', function(e){ e.preventDefault(); Mob[z[1]] = false; if(_fpsDebug) console.log('MOUSE UP', z[0], z[1]); });
+      el.addEventListener('mouseleave', function(e){ Mob[z[1]] = false; });
+    });
+  }
+
+  return { init: init };
+})();
+
+// Start touch manager early so it overrides naive handlers
+TouchInputManager.init();
 
 var In = {
   left:    function () { return !!(Keys.left || Mob.left || GamepadInput.leftStickX() < -0.5); },
@@ -1177,6 +1251,12 @@ function updateCam(dt, px, py, worldW, facing) {
     cam.y = lerp(cam.y, targetY, dt * 7.5);
     cam.y = clamp(cam.y, 0, Math.max(0, WORLD_HEIGHT - viewH));
   } else { cam.y = 0; }
+  // Ensure player remains within visible vertical band (extra safety)
+  try {
+    var topGap = 28, bottomGap = 84;
+    if (py < cam.y + topGap) cam.y = clamp(py - topGap, 0, Math.max(0, WORLD_HEIGHT - viewH));
+    if (py > cam.y + viewH - bottomGap) cam.y = clamp(py - (viewH - bottomGap), 0, Math.max(0, WORLD_HEIGHT - viewH));
+  } catch(e) { /* defensive */ }
   if (cam.st > 0) {
     cam.st -= dt;
     var d = cam.st > 0 ? cam.st / 0.7 : 0;
@@ -2702,6 +2782,7 @@ function update(dt){
    ========================================================================== */
 var _firstRender=true;
 function draw(t){
+  if (_fpsDebug) console.log('DRAW', t.toFixed ? t.toFixed(3) : t);
   ctx.clearRect(0,0,VW,VH);
   // Render canvas for all these states (overlays handle UI on top)
   var drawStates=[STATE.PLAYING,STATE.PAUSED,STATE.VICTORY,STATE.LVL_TRANS];
@@ -2760,6 +2841,7 @@ function draw(t){
 var _lastTS = 0, _loopT = 0;
 function loop(ts) {
   var dt = getDeltaTime(ts);
+  if (_fpsDebug) console.log('LOOP dt', dt.toFixed ? dt.toFixed(3) : dt);
   _loopT += dt;
   _fpsElapsed += dt;
   _fpsCount++;
@@ -2783,9 +2865,26 @@ function loop(ts) {
   requestAnimationFrame(loop);
 }
 
-console.log('Game loop running');
+// Loop bootstrap with safety: ensure only one RAF instance
+var _loopStarted = false;
+function startLoop(){
+  if(_loopStarted) return; _loopStarted = true;
+  _lastFrameTime = 0; // reset to avoid a large dt on first frame
+  requestAnimationFrame(loop);
+  console.log('Game loop started');
+}
+
+document.addEventListener('visibilitychange', function(){
+  if(document.hidden){
+    // page hidden — audio may suspend; avoid dt spike when visible again
+    // keep loop running but reset timing on resume
+  } else {
+    _lastFrameTime = 0; // reset time so next frame has clamped dt
+  }
+});
+
 showScreen('sTitle');
-requestAnimationFrame(loop);
+startLoop();
 
 
 }); // end DOMContentLoaded
