@@ -66,6 +66,11 @@ function resizeCanvas() {
   canvas.style.height = drawH + 'px';
   ctx.setTransform(scaleFit * DPR, 0, 0, scaleFit * DPR, 0, 0);
   WORLD_TOP_OFFSET = Math.max(0, (LOGICAL_H - WORLD_HEIGHT) / 2);
+  // if a player exists, immediately re-clamp camera so they stay on screen
+  if(typeof GS !== 'undefined' && GS.player && GS.cfg){
+    // dt=0 so camera snaps
+    updateCam(0, GS.player.x, GS.player.y, GS.cfg.worldW, GS.player.facing);
+  }
 }
 resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
@@ -882,6 +887,16 @@ function showSkillToast(msg) {
    ========================================================================== */
 var Keys = {}, JD = {}, JU = {};
 var Mob = { left: false, right: false, up: false, attack: false, blast: false, special: false, air: false };
+// keep previous mob state to produce just-down/up events
+var _lastMobState = { left: false, right: false, up: false, attack: false, blast: false, special: false, air: false };
+function syncMobToJD(){
+  for(var k in Mob){
+    if(Mob[k] && !_lastMobState[k]){ JD[k] = true; if(_fpsDebug) console.log('MOB justDown', k); }
+    if(!Mob[k] && _lastMobState[k]){ JU[k] = true; if(_fpsDebug) console.log('MOB justUp', k); }
+    _lastMobState[k] = Mob[k];
+  }
+}
+
 var KMAP = {
   ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down',
   a: 'left', A: 'left', d: 'right', D: 'right', w: 'up', W: 'up', s: 'down', S: 'down',
@@ -968,11 +983,22 @@ function bindMob(id,prop){
   var el=document.getElementById(id); if(!el)return;
   function on(e){
     // Mouse support only (touch handled by TouchInputManager)
-    Mob[prop]=true;
+    if(TouchInputManager && TouchInputManager.press){
+      TouchInputManager.press(prop);
+    } else {
+      Mob[prop] = true;
+    }
     // Init audio on first interaction
     Audio.init(); Audio.resume();
   }
-  function off(e){e.preventDefault();Mob[prop]=false;}
+  function off(e){
+    e.preventDefault();
+    if(TouchInputManager && TouchInputManager.release){
+      TouchInputManager.release(prop);
+    } else {
+      Mob[prop] = false;
+    }
+  }
   // Do not bind touch here to avoid conflicts with multi-touch manager
   el.addEventListener('mousedown',on);
   el.addEventListener('mouseup',off);
@@ -983,8 +1009,10 @@ bindMob('abJump','up'); bindMob('abAttack','attack'); bindMob('abBlast','blast')
 bindMob('abKame','special'); bindMob('abAir','air');
 
 // Multi-touch manager: maps touches -> Mob state by tracking identifiers
+// now supports counting and just‑down events
 var TouchInputManager = (function(){
   var touchMap = {}; // id -> prop
+  var propCounts = {}; // prop -> number of active touches
   var zones = [
     ['dpL','left'],['dpR','right'],['dpU','up'],['abJump','up'],['abAttack','attack'],['abBlast','blast'],['abKame','special'],['abAir','air'],['abSSJ','transform']
   ];
@@ -1000,40 +1028,75 @@ var TouchInputManager = (function(){
     return null;
   }
 
+  function _pressProp(prop){
+    propCounts[prop] = (propCounts[prop]||0) + 1;
+    if(propCounts[prop] === 1){
+      Mob[prop] = true;
+      JD[prop] = true;            // feed just-down so jump works on mobile
+      if(_fpsDebug) console.log('INPUT PRESS', prop);
+    }
+  }
+  function _releaseProp(prop){
+    if(!prop) return;
+    propCounts[prop] = (propCounts[prop]||1) - 1;
+    if(propCounts[prop] <= 0){
+      propCounts[prop] = 0;
+      Mob[prop] = false;
+      JU[prop] = true;
+      if(_fpsDebug) console.log('INPUT RELEASE', prop);
+    }
+  }
+
   function onTouchStart(e){
     if(e&&e.preventDefault) e.preventDefault();
     for(var i=0;i<e.changedTouches.length;i++){
       var t = e.changedTouches[i];
       var hit = _elemForPoint(t.clientX, t.clientY);
-      if(hit){ touchMap[t.identifier] = hit.prop; Mob[hit.prop] = true; Audio.init(); Audio.resume(); if(_fpsDebug) console.log('TOUCH START', t.identifier, hit.id, hit.prop); }
+      if(hit){
+        touchMap[t.identifier] = hit.prop;
+        _pressProp(hit.prop);
+        Audio.init(); Audio.resume();
+        if(_fpsDebug) console.log('TOUCH START', t.identifier, hit.id, hit.prop);
+      }
     }
   }
   function onTouchMove(e){
     if(e&&e.preventDefault) e.preventDefault();
     for(var i=0;i<e.changedTouches.length;i++){
-      var t=e.changedTouches[i];
+      var t = e.changedTouches[i];
       var prev = touchMap[t.identifier] || null;
       var hit = _elemForPoint(t.clientX,t.clientY);
       var nowProp = hit ? hit.prop : null;
       if(prev !== nowProp){
-        if(prev) { Mob[prev] = false; if(_fpsDebug) console.log('TOUCH MOVE release', t.identifier, prev); }
-        if(nowProp){ Mob[nowProp] = true; touchMap[t.identifier]=nowProp; if(_fpsDebug) console.log('TOUCH MOVE press', t.identifier, hit.id, nowProp); }
-        else delete touchMap[t.identifier];
+        _releaseProp(prev);
+        if(nowProp){
+          _pressProp(nowProp);
+          touchMap[t.identifier] = nowProp;
+          if(_fpsDebug) console.log('TOUCH MOVE press', t.identifier, hit.id, nowProp);
+        } else {
+          delete touchMap[t.identifier];
+          if(_fpsDebug) console.log('TOUCH MOVE leave', t.identifier);
+        }
       }
     }
   }
   function onTouchEnd(e){
     if(e&&e.preventDefault) e.preventDefault();
     for(var i=0;i<e.changedTouches.length;i++){
-      var t=e.changedTouches[i];
+      var t = e.changedTouches[i];
       var prop = touchMap[t.identifier];
-      if(prop){ Mob[prop]=false; if(_fpsDebug) console.log('TOUCH END', t.identifier, prop); }
+      if(prop){
+        _releaseProp(prop);
+        if(_fpsDebug) console.log('TOUCH END', t.identifier, prop);
+      }
       delete touchMap[t.identifier];
     }
   }
 
   function init(){
     try{ document.body.style.touchAction = 'none'; }catch(e){}
+    // also disable on root element to block pinch/zoom
+    try{ document.documentElement.style.touchAction = 'none'; }catch(e){}
     var mctl = document.getElementById('mobileCtrl'); if(mctl) try{ mctl.style.touchAction = 'none'; }catch(e){}
     document.addEventListener('touchstart', onTouchStart, {passive:false});
     document.addEventListener('touchmove', onTouchMove, {passive:false});
@@ -1043,13 +1106,13 @@ var TouchInputManager = (function(){
     // Mouse fallback for mobile buttons
     zones.forEach(function(z){
       var el = document.getElementById(z[0]); if(!el) return;
-      el.addEventListener('mousedown', function(e){ e.preventDefault(); Mob[z[1]] = true; Audio.init(); Audio.resume(); if(_fpsDebug) console.log('MOUSE DOWN', z[0], z[1]); });
-      el.addEventListener('mouseup', function(e){ e.preventDefault(); Mob[z[1]] = false; if(_fpsDebug) console.log('MOUSE UP', z[0], z[1]); });
-      el.addEventListener('mouseleave', function(e){ Mob[z[1]] = false; });
+      el.addEventListener('mousedown', function(e){ e.preventDefault(); _pressProp(z[1]); Audio.init(); Audio.resume(); if(_fpsDebug) console.log('MOUSE DOWN', z[0], z[1]); });
+      el.addEventListener('mouseup', function(e){ e.preventDefault(); _releaseProp(z[1]); if(_fpsDebug) console.log('MOUSE UP', z[0], z[1]); });
+      el.addEventListener('mouseleave', function(e){ _releaseProp(z[1]); });
     });
   }
 
-  return { init: init };
+  return { init: init, press: _pressProp, release: _releaseProp };
 })();
 
 // Start touch manager early so it overrides naive handlers
@@ -1064,7 +1127,7 @@ var In = {
   special: function () { return !!(Keys.special || Mob.special || GamepadInput.button('special')); },
   air:     function () { return !!(Keys.air || Mob.air); },
   jd:      function (k) { return !!JD[k]; },
-  wasUp:   function () { return !!(JD.up || GamepadInput.buttonJustDown('up')); },
+  wasUp:   function () { return !!(JD.up || Mob.up || GamepadInput.buttonJustDown('up')); },
   wasAir:  function () { return !!JD.air; }
 };
 function flushInput() { for (var k in JD) delete JD[k]; for (var k in JU) delete JU[k]; }
@@ -1241,22 +1304,36 @@ function drawDamageNumbers(cx) {
 }
 
 function updateCam(dt, px, py, worldW, facing) {
+  // defensive sanitization in case something went wrong upstream
+  if (!isFinite(px)) px = 0;
+  if (!isFinite(py)) py = 0;
+  if (!isFinite(worldW)) worldW = VW;
+
   var lookAhead = (facing === 1 ? 1 : facing === -1 ? -1 : 0) * Math.min(120, VW * 0.08);
   var targetX = px - VW * 0.35 + lookAhead;
   cam.x = lerp(cam.x, targetX, dt * 7.5);
   cam.x = clamp(cam.x, 0, Math.max(0, worldW - VW));
+
   var viewH = VH - (WORLD_TOP_OFFSET || 0) * 2;
   if (viewH > 0 && WORLD_HEIGHT > viewH) {
     var targetY = py - viewH * 0.5 - 24;
     cam.y = lerp(cam.y, targetY, dt * 7.5);
     cam.y = clamp(cam.y, 0, Math.max(0, WORLD_HEIGHT - viewH));
   } else { cam.y = 0; }
+
   // Ensure player remains within visible vertical band (extra safety)
   try {
     var topGap = 28, bottomGap = 84;
     if (py < cam.y + topGap) cam.y = clamp(py - topGap, 0, Math.max(0, WORLD_HEIGHT - viewH));
     if (py > cam.y + viewH - bottomGap) cam.y = clamp(py - (viewH - bottomGap), 0, Math.max(0, WORLD_HEIGHT - viewH));
   } catch(e) { /* defensive */ }
+
+  // final sanity clamp
+  if (!isFinite(cam.x)) cam.x = 0;
+  if (!isFinite(cam.y)) cam.y = 0;
+
+  if (_fpsDebug) console.log('CAM', cam.x.toFixed(1), cam.y.toFixed(1));
+
   if (cam.st > 0) {
     cam.st -= dt;
     var d = cam.st > 0 ? cam.st / 0.7 : 0;
@@ -2613,7 +2690,12 @@ function drawPU(cfg,camX,t){
    ========================================================================== */
 function update(dt){
   GamepadInput.poll();
-  if (In.jd('debug')) _fpsDebug = !_fpsDebug;
+  syncMobToJD();
+  if(_fpsDebug) console.log('UPDATE frame dt', dt.toFixed ? dt.toFixed(3) : dt);
+  if (In.jd('debug')) {
+    _fpsDebug = !_fpsDebug;
+    console.log('FPS debug ' + (_fpsDebug ? 'ON' : 'OFF'));
+  }
   if (In.jd('fullscreen')) toggleFullscreen();
   if (GamepadInput.buttonJustDown('pause')) {
     if (GS.state === STATE.PLAYING) { GS.state = STATE.PAUSED; showScreen('sPause'); Audio.resume(); }
@@ -2839,28 +2921,40 @@ function draw(t){
    GAME LOOP — high-FPS, deltaTime-based, FPS overlay
    ========================================================================== */
 var _lastTS = 0, _loopT = 0;
+var _loopPaused = false;
 function loop(ts) {
-  var dt = getDeltaTime(ts);
-  if (_fpsDebug) console.log('LOOP dt', dt.toFixed ? dt.toFixed(3) : dt);
-  _loopT += dt;
-  _fpsElapsed += dt;
-  _fpsCount++;
-  if (_fpsElapsed >= 0.5) {
-    _fpsDisplay = Math.round(_fpsCount / _fpsElapsed);
-    _fpsCount = 0;
-    _fpsElapsed = 0;
+  if (_loopPaused) {
+    // keep requesting but do nothing; avoid huge dt when we unpause
+    _lastFrameTime = ts;
+    requestAnimationFrame(loop);
+    return;
   }
-  update(dt);
-  draw(_loopT);
-  if (_fpsDebug) {
-    ctx.save();
-    ctx.font = 'bold 18px monospace';
-    ctx.fillStyle = '#00ff44';
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = 2;
-    ctx.strokeText('FPS: ' + _fpsDisplay, 14, 32);
-    ctx.fillText('FPS: ' + _fpsDisplay, 14, 32);
-    ctx.restore();
+  try {
+    var dt = getDeltaTime(ts);
+    if (_fpsDebug) console.log('LOOP dt', dt.toFixed ? dt.toFixed(3) : dt);
+    _loopT += dt;
+    _fpsElapsed += dt;
+    _fpsCount++;
+    if (_fpsElapsed >= 0.5) {
+      _fpsDisplay = Math.round(_fpsCount / _fpsElapsed);
+      _fpsCount = 0;
+      _fpsElapsed = 0;
+    }
+    update(dt);
+    draw(_loopT);
+    if (_fpsDebug) console.log('DRAW frame');
+    if (_fpsDebug) {
+      ctx.save();
+      ctx.font = 'bold 18px monospace';
+      ctx.fillStyle = '#00ff44';
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 2;
+      ctx.strokeText('FPS: ' + _fpsDisplay, 14, 32);
+      ctx.fillText('FPS: ' + _fpsDisplay, 14, 32);
+      ctx.restore();
+    }
+  } catch (ex) {
+    console.error('Game loop error', ex);
   }
   requestAnimationFrame(loop);
 }
@@ -2876,10 +2970,13 @@ function startLoop(){
 
 document.addEventListener('visibilitychange', function(){
   if(document.hidden){
-    // page hidden — audio may suspend; avoid dt spike when visible again
-    // keep loop running but reset timing on resume
+    // pause updates while hidden to save battery and avoid strange input
+    _loopPaused = true;
+    if(_fpsDebug) console.log('visibilitychange: hidden, pausing loop');
   } else {
+    _loopPaused = false;
     _lastFrameTime = 0; // reset time so next frame has clamped dt
+    if(_fpsDebug) console.log('visibilitychange: visible, resuming loop');
   }
 });
 
